@@ -33,6 +33,9 @@ DENY_PATTERNS=(
   # Shell execution of file paths (two-step download-then-execute)
   '^(ba)?sh\s+[/~.]'
   '^zsh\s+[/~.]'
+  '\bexec\s+[/~.]'                     # exec with file path
+  '\bsource\s+[/~.]'                   # source with file path
+  '(^|\s)\.\s+[/~.]'                   # POSIX dot-source with file path
 
   # Destructive git
   'git\s+push\s+.*--force(\s|$)'      # --force but NOT --force-with-lease
@@ -81,8 +84,8 @@ if printf '%s\n' "$COMMAND" | grep -qE '\brm\s'; then
   printf '%s\n' "$COMMAND" | grep -qE '\brm\s+.*(-[a-zA-Z]*[rR]|--recursive)' && has_recursive=true
   printf '%s\n' "$COMMAND" | grep -qE '\brm\s+.*(-[a-zA-Z]*f|--force)' && has_force=true
   if $has_recursive && $has_force; then
-    # Block if targeting dangerous scope: /, ~, ../, ., ..
-    if printf '%s\n' "$COMMAND" | grep -qE '\brm\s+.*\s+(/|~|\.\./|\.\s*$|\.\.\s*$)'; then
+    # Block if targeting dangerous scope: /, /*, ~, ~/, ~/* ../, ., ..
+    if printf '%s\n' "$COMMAND" | grep -qE '\brm\s+.*\s+(/\*?|~/?\*?|\.\./|\.\s*$|\.\.\s*$)(\s|$)'; then
       echo "BLOCKED by claude-firewall: rm with recursive+force at dangerous scope" >&2
       echo "  Command: $COMMAND" >&2
       exit 2
@@ -194,7 +197,7 @@ ALLOW_PATTERNS=(
 )
 
 # ─── Compound command splitting ──────────────────────────────────────────────
-# Split on &&, ||, |, and ; so each segment is checked independently.
+# Split on &&, ||, |, ;, and & so each segment is checked independently.
 # This prevents smuggling an ASK-tier command after an allowed prefix
 # (e.g. "echo hi && brew install malware").
 #
@@ -225,7 +228,7 @@ done < <(printf '%s' "$COMMAND" | awk 'BEGIN{RS="\0"} {
         seg_start = i + 1
         continue
       }
-      if (c == "|" || c == ";") {
+      if (c == "|" || c == ";" || c == "&") {
         printf "%s", substr($0, seg_start, i - seg_start)
         printf "%c", 0
         seg_start = i + 1
@@ -247,7 +250,15 @@ PROTECTED_PATHS='(\.claude/hooks/|\.claude/settings\.json|\.claude/rules/)'
 WRITE_TOOLS='\b(cp|mv|tee|sed\s.*-i|ln|curl\s.*-o|curl\s.*--output|wget\s.*-O|wget\s.*--output-document|rm|rm\s+-)\b'
 
 for segment in "${SEGMENTS[@]}"; do
-  if printf '%s' "$segment" | grep -qE "$PROTECTED_PATHS"; then
+  # Normalize paths to defeat bypass tricks (//  /../  $HOME  ~)
+  norm_seg="$segment"
+  norm_seg="${norm_seg//$HOME/\~}"                       # /home/user → ~
+  while [[ "$norm_seg" == *'//'* ]]; do                  # collapse //
+    norm_seg="${norm_seg//\/\///}"
+  done
+  # Collapse /foo/../ → / (simple single-level only)
+  norm_seg=$(printf '%s' "$norm_seg" | sed 's|/[^/]*/\.\./|/|g')
+  if printf '%s' "$norm_seg" | grep -qE "$PROTECTED_PATHS"; then
     if printf '%s' "$segment" | grep -qE "$WRITE_TOOLS"; then
       echo "BLOCKED by claude-firewall: write to protected path" >&2
       echo "  Command: $COMMAND" >&2
