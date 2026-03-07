@@ -25,6 +25,14 @@ DENY_PATTERNS=(
 
   # Privilege escalation
   '\bsudo\b'
+  '\bdoas\b'
+  '\bpkexec\b'
+  '\bsu\s'
+  '\brun0\b'
+
+  # Shell execution of file paths (two-step download-then-execute)
+  '^(ba)?sh\s+[/~.]'
+  '^zsh\s+[/~.]'
 
   # Destructive git
   'git\s+push\s+.*--force(\s|$)'      # --force but NOT --force-with-lease
@@ -105,6 +113,26 @@ if printf '%s' "$COMMAND" | grep -qE '\$\(|`|<\(|>\('; then
   exit 0
 fi
 
+# ─── Tier 1e: Self-tampering guard ────────────────────────────────────────────
+# Deny commands that write to firewall infrastructure paths.
+# Protects the firewall itself, its hook wiring, and instruction files.
+
+PROTECTED_PATHS='(\.claude/hooks/|\.claude/settings\.json|\.claude/rules/)'
+if printf '%s' "$COMMAND" | grep -qE "$PROTECTED_PATHS"; then
+  # Only block write-capable tools targeting these paths
+  if printf '%s' "$COMMAND" | grep -qE '^(cp|mv|tee|sed\s.*-i|ln\s)'; then
+    echo "BLOCKED by claude-firewall: write to protected path" >&2
+    echo "  Command: $COMMAND" >&2
+    exit 2
+  fi
+  # Redirect-based overwrites (> or >>) to protected paths
+  if printf '%s' "$COMMAND" | grep -qE '>\s*\S*'"$PROTECTED_PATHS"; then
+    echo "BLOCKED by claude-firewall: redirect to protected path" >&2
+    echo "  Command: $COMMAND" >&2
+    exit 2
+  fi
+fi
+
 # ─── Tier 2: ALLOW (auto-approve, no prompt) ────────────────────────────────
 
 ALLOW_PATTERNS=(
@@ -170,11 +198,11 @@ ALLOW_PATTERNS=(
   # Homebrew
   '^brew\s+(info|list|search|leaves|deps|doctor|config)'
 
-  # gh CLI (read + common write ops; gh repo delete caught by deny)
-  '^gh\s+(pr|issue|repo|run|search|api|auth\s+status|status|gist)\s'
+  # gh CLI (read + common write ops; gh repo delete caught by deny, gh api falls to ASK)
+  '^gh\s+(pr|issue|repo|run|search|auth\s+status|status|gist)\s'
 
-  # Misc dev tools
-  '^(open|pbcopy|pbpaste|xdg-open|code|subl)(\s|$)'
+  # Misc dev tools (open/xdg-open fall to ASK — can open arbitrary URLs)
+  '^(pbcopy|pbpaste|code|subl)(\s|$)'
 
   # Universal read-only flags (any tool)
   '^[a-zA-Z0-9_.-]+\s+--version(\s|$)'
@@ -223,6 +251,12 @@ done < <(printf '%s' "$COMMAND" | awk 'BEGIN{RS="\0"} {
 # ALL segments must independently match an allow pattern for auto-approve
 all_allowed=true
 for segment in "${SEGMENTS[@]}"; do
+  # Newline guard: if a segment contains a literal newline, force ASK.
+  # grep is line-oriented so "echo hi\nrm -rf /" would match ^echo on line 1.
+  if [[ "$segment" == *$'\n'* ]]; then
+    all_allowed=false
+    break
+  fi
   segment_allowed=false
   for pattern in "${ALLOW_PATTERNS[@]}"; do
     if printf '%s\n' "$segment" | grep -qE "$pattern"; then

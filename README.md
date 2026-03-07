@@ -20,12 +20,14 @@ claude-firewall is a [PreToolUse hook](https://docs.anthropic.com/en/docs/claude
 
 **Tier 1 — DENY:** Hard-blocks catastrophic patterns. No override, no prompt. Includes:
 - Shell injection (`curl | sh`, `eval`, pipe-to-shell)
-- Privilege escalation (`sudo`)
+- Privilege escalation (`sudo`, `doas`, `pkexec`, `su`, `run0`)
 - Destructive git (`push --force`, `reset --hard`, `clean -f`)
 - System destruction (`mkfs`, `dd`, `chmod 777`, `chmod -R`)
 - Data exfiltration (curl/wget file uploads)
 - Destructive GitHub ops (`gh repo delete`)
 - `rm -rf` at dangerous scopes (`/`, `~`, `..`, `.`)
+- Shell execution of downloaded files (`sh /tmp/x.sh`, `bash ./script.sh`)
+- Self-tampering (writes to `~/.claude/hooks/`, `~/.claude/settings.json`, `~/.claude/rules/`)
 
 **Tier 1c — AUTO-REJECT:** Commands that are wrong but reformattable. The hook rejects with instructions and Claude retries correctly — no human in the loop. Example: `git commit -m "$(cat <<EOF...)"` → auto-rejected with guidance to use `printf '...' | git commit -F -`.
 
@@ -97,6 +99,17 @@ When adding patterns, consider: could a dangerous command match this regex? The 
 ## How it works with --dangerously-skip-permissions
 
 Hooks fire even in bypass mode. This means claude-firewall's DENY tier is a hard safety floor that survives a user explicitly opting out of all permissions. If you want YOLO speed with a safety net, use `--dangerously-skip-permissions` with claude-firewall installed.
+
+## Threat model
+
+claude-firewall assumes a **cooperative agent making mistakes**, not a hostile agent trying to escape. This is an important distinction:
+
+- **Interpreters stay in ALLOW.** `python`, `node`, `npm install`, `cargo build` are auto-approved because they're the bread and butter of developer workflows. Yes, `python -c 'os.system("rm -rf /")'` would auto-approve — but constraining inline code execution via regex is a losing game that would break normal use. If the agent is adversarial, regex-based filtering is insufficient regardless.
+- **curl/wget stay in ALLOW.** Network reads are high-frequency operations. Upload/exfiltration patterns (`-d @`, `--upload-file`, `--post-file`) are denied. A two-step download-then-execute (`curl -o /tmp/x.sh && sh /tmp/x.sh`) is caught because `sh /tmp/x.sh` hits the shell-execute-file deny pattern.
+- **Self-tampering is denied.** Even a friendly agent shouldn't accidentally overwrite the firewall, its hook wiring, or instruction files. `cp`, `mv`, `sed -i`, and redirects targeting `~/.claude/hooks/`, `~/.claude/settings.json`, or `~/.claude/rules/` are hard-blocked.
+- **`gh api` falls to ASK.** Unlike `gh pr` or `gh issue`, `gh api` can make arbitrary GitHub API calls and is too broad to auto-approve.
+
+The DENY tier is a hard safety floor — it fires even in `--dangerously-skip-permissions` mode. The ALLOW tier is a convenience layer for known-safe developer commands. ASK is the catch-all for everything else.
 
 ## Contributing
 
