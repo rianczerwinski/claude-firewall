@@ -113,26 +113,6 @@ if printf '%s' "$COMMAND" | grep -qE '\$\(|`|<\(|>\('; then
   exit 0
 fi
 
-# ─── Tier 1e: Self-tampering guard ────────────────────────────────────────────
-# Deny commands that write to firewall infrastructure paths.
-# Protects the firewall itself, its hook wiring, and instruction files.
-
-PROTECTED_PATHS='(\.claude/hooks/|\.claude/settings\.json|\.claude/rules/)'
-if printf '%s' "$COMMAND" | grep -qE "$PROTECTED_PATHS"; then
-  # Only block write-capable tools targeting these paths
-  if printf '%s' "$COMMAND" | grep -qE '^(cp|mv|tee|sed\s.*-i|ln\s)'; then
-    echo "BLOCKED by claude-firewall: write to protected path" >&2
-    echo "  Command: $COMMAND" >&2
-    exit 2
-  fi
-  # Redirect-based overwrites (> or >>) to protected paths
-  if printf '%s' "$COMMAND" | grep -qE '>\s*\S*'"$PROTECTED_PATHS"; then
-    echo "BLOCKED by claude-firewall: redirect to protected path" >&2
-    echo "  Command: $COMMAND" >&2
-    exit 2
-  fi
-fi
-
 # ─── Tier 2: ALLOW (auto-approve, no prompt) ────────────────────────────────
 
 ALLOW_PATTERNS=(
@@ -174,8 +154,8 @@ ALLOW_PATTERNS=(
   '^cd(\s|$)'
   '^mkdir\s'
 
-  # Text processing
-  '^(jq|sed|awk|sort|uniq|cut|tr|xargs|tee|diff|patch|column|paste|comm|join|expand|fold|fmt|nl|pr|rev|shuf)(\s|$)'
+  # Text processing (tee omitted — it's a file-write tool, falls to ASK)
+  '^(jq|sed|awk|sort|uniq|cut|tr|xargs|diff|patch|column|paste|comm|join|expand|fold|fmt|nl|pr|rev|shuf)(\s|$)'
 
   # Network reads (pipe-to-shell and file exfil caught by deny tier)
   '^(curl|wget|http|httpie)(\s|$)'
@@ -199,7 +179,9 @@ ALLOW_PATTERNS=(
   '^brew\s+(info|list|search|leaves|deps|doctor|config)'
 
   # gh CLI (read + common write ops; gh repo delete caught by deny, gh api falls to ASK)
-  '^gh\s+(pr|issue|repo|run|search|auth\s+status|status|gist)\s'
+  '^gh\s+(pr|issue|repo|run|search|auth\s+status|status)\s'
+  # gh gist — only list/view (create/edit can exfiltrate files, falls to ASK)
+  '^gh\s+gist\s+(list|view)\s'
 
   # Misc dev tools (open/xdg-open fall to ASK — can open arbitrary URLs)
   '^(pbcopy|pbpaste|code|subl)(\s|$)'
@@ -227,8 +209,8 @@ while IFS= read -r -d '' seg; do
   SEGMENTS+=("$seg")
 done < <(printf '%s' "$COMMAND" | awk 'BEGIN{RS="\0"} {
   n = length($0)
-  out = ""
   in_sq = 0; in_dq = 0
+  seg_start = 1
   for (i = 1; i <= n; i++) {
     c = substr($0, i, 1)
     if (c == "\"" && !in_sq) { in_dq = !in_dq }
@@ -236,20 +218,71 @@ done < <(printf '%s' "$COMMAND" | awk 'BEGIN{RS="\0"} {
 
     if (!in_sq && !in_dq) {
       two = substr($0, i, 2)
-      if (two == "&&") { out = out "\0"; i++; continue }
-      if (two == "||") { out = out "\0"; i++; continue }
-      if (c == "|")   { out = out "\0"; continue }
-      if (c == ";")   { out = out "\0"; continue }
+      if (two == "&&" || two == "||") {
+        printf "%s", substr($0, seg_start, i - seg_start)
+        printf "%c", 0
+        i++
+        seg_start = i + 1
+        continue
+      }
+      if (c == "|" || c == ";") {
+        printf "%s", substr($0, seg_start, i - seg_start)
+        printf "%c", 0
+        seg_start = i + 1
+        continue
+      }
     }
-    out = out c
   }
-  printf "%s", out
+  printf "%s", substr($0, seg_start)
+  printf "%c", 0
 }')
 
 [[ ${#SEGMENTS[@]} -eq 0 ]] && SEGMENTS=("$COMMAND")
 
+# ─── Tier 1e: Self-tampering guard (per-segment) ────────────────────────────
+# Deny segments that write to firewall infrastructure paths.
+# Runs after splitting so "echo x | tee ~/.claude/hooks/firewall.sh" is caught.
+
+PROTECTED_PATHS='(\.claude/hooks/|\.claude/settings\.json|\.claude/rules/)'
+WRITE_TOOLS='\b(cp|mv|tee|sed\s.*-i|ln|curl\s.*-o|curl\s.*--output|wget\s.*-O|wget\s.*--output-document|rm|rm\s+-)\b'
+
+for segment in "${SEGMENTS[@]}"; do
+  if printf '%s' "$segment" | grep -qE "$PROTECTED_PATHS"; then
+    if printf '%s' "$segment" | grep -qE "$WRITE_TOOLS"; then
+      echo "BLOCKED by claude-firewall: write to protected path" >&2
+      echo "  Command: $COMMAND" >&2
+      exit 2
+    fi
+    # Redirect-based overwrites (> or >>) to protected paths
+    if printf '%s' "$segment" | grep -qE '>\s*\S*'"$PROTECTED_PATHS"; then
+      echo "BLOCKED by claude-firewall: redirect to protected path" >&2
+      echo "  Command: $COMMAND" >&2
+      exit 2
+    fi
+  fi
+done
+
+# ─── Tier 1f: Sensitive dotfile guard (per-segment) ─────────────────────────
+# Force ASK for writes to sensitive user dotfiles. These are legitimate write
+# targets sometimes, but warrant human review — a friendly agent accidentally
+# overwriting ~/.bashrc is a more likely mistake than spawning a reverse shell.
+
+SENSITIVE_DOTFILES='(/\.(ssh|gnupg)/|/\.(bashrc|bash_profile|profile|zshrc|zshenv|zprofile|npmrc|gitconfig|env)(\s|$))'
+
+dotfile_write=false
+for segment in "${SEGMENTS[@]}"; do
+  if printf '%s' "$segment" | grep -qE "$SENSITIVE_DOTFILES"; then
+    if printf '%s' "$segment" | grep -qE "$WRITE_TOOLS|>\s"; then
+      # Force ASK, not DENY — legitimate writes to these files do occur
+      dotfile_write=true
+      break
+    fi
+  fi
+done
+
 # ALL segments must independently match an allow pattern for auto-approve
 all_allowed=true
+if $dotfile_write; then all_allowed=false; fi
 for segment in "${SEGMENTS[@]}"; do
   # Newline guard: if a segment contains a literal newline, force ASK.
   # grep is line-oriented so "echo hi\nrm -rf /" would match ^echo on line 1.
