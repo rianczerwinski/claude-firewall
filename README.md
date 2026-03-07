@@ -96,6 +96,8 @@ When adding patterns, consider: could a dangerous command match this regex? The 
 
 - `CLAUDE_FIREWALL_LOG` — Override the ASK log location (default: `~/.claude/hooks/firewall-ask.log`)
 
+**Privacy note:** The ASK log records full command text in plaintext. If your workflow involves secrets or passwords passed as command arguments, these will appear in the log. The log is gitignored by default but lives on disk at the path above. Set `CLAUDE_FIREWALL_LOG=/dev/null` to disable logging entirely.
+
 ## How it works with --dangerously-skip-permissions
 
 Hooks fire even in bypass mode. This means claude-firewall's DENY tier is a hard safety floor that survives a user explicitly opting out of all permissions. If you want YOLO speed with a safety net, use `--dangerously-skip-permissions` with claude-firewall installed.

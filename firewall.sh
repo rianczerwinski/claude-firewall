@@ -10,6 +10,11 @@
 # This hook is the sole mechanism that grants automatic Bash approval —
 # no Bash(*) allow rule is needed.
 
+if ! command -v jq &>/dev/null; then
+  echo "claude-firewall: jq is required but not installed" >&2
+  exit 2
+fi
+
 INPUT=$(cat)
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command')
 
