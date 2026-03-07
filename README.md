@@ -2,7 +2,17 @@
 
 ***Non**-dangerously skip permissions for Claude Code.*
 
-Claude Code gives you three choices for Bash permissions: prompt on every command (safe but slow), `--dangerously-skip-permissions` (fast but blind), or nothing in between. claude-firewall is the middle way — a tiered policy engine that auto-approves safe commands, hard-blocks dangerous ones, and only prompts you when your judgment actually matters.
+Claude Code has five permission modes — across CLI, VS Code, Cursor, JetBrains, the web client, and Desktop:
+
+1. **Default** — prompts per tool type on first use
+2. **Accept Edits** — auto-accepts file modifications, still prompts Bash
+3. **Plan** — read-only, no modifications allowed
+4. **Don't Ask** — auto-denies everything not explicitly allowlisted
+5. **Bypass Permissions** (`--dangerously-skip-permissions`) — skips all prompts
+
+All five operate at the **tool level**, not the command level. For Bash specifically, your options are: prompt on every command, or don't prompt at all. There's no built-in way to say "auto-approve `git status` but block `rm -rf /`."
+
+claude-firewall adds that layer — a tiered policy engine that auto-approves safe commands, hard-blocks dangerous ones, and only prompts you when your judgment actually matters.
 
 ## How it works
 
