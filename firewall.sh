@@ -24,6 +24,8 @@ DENY_PATTERNS=(
   # Pipe/redirect into shell execution
   '\|\s*(ba)?sh(\s|$)'
   '\|\s*zsh(\s|$)'
+  '\|\s*/(usr/)?bin/(ba)?sh(\s|$)'    # full-path pipe to shell
+  '\|\s*/(usr/)?bin/zsh(\s|$)'
   '\beval\s'
   '\bsource\s+<\('
   '(^|\s)\.\s+<\('                    # POSIX dot-source via process substitution
@@ -38,9 +40,17 @@ DENY_PATTERNS=(
   # Shell execution of file paths (two-step download-then-execute)
   '^(ba)?sh\s+[/~.]'
   '^zsh\s+[/~.]'
+  '^/(usr/)?bin/(ba)?sh\s+[/~.]'       # full-path shell execution
+  '^/(usr/)?bin/zsh\s+[/~.]'
   '\bexec\s+[/~.]'                     # exec with file path
   '\bsource\s+[/~.]'                   # source with file path
   '(^|\s)\.\s+[/~.]'                   # POSIX dot-source with file path
+
+  # Shell -c (arbitrary code execution via string argument)
+  '\b(ba)?sh\s+-c\b'
+  '\bzsh\s+-c\b'
+  '/(usr/)?bin/(ba)?sh\s+-c\b'
+  '/(usr/)?bin/zsh\s+-c\b'
 
   # Destructive git
   'git\s+push\s+.*--force(\s|$)'      # --force but NOT --force-with-lease
@@ -61,7 +71,7 @@ DENY_PATTERNS=(
   'wget.*\|\s*(ba)?sh'
 
   # Data exfiltration (curl/wget file upload patterns)
-  '(curl|wget)\s+.*(-d\s*@|--data\S*\s+@|--upload-file|-F\s+\S*@|--form\s+\S*@|-T\s+[/~.])'
+  '(curl|wget)\s+.*(-d\s*@|-d@|--data\S*[=\s]+@|--upload-file|-F\s+\S*@|--form\s+\S*@|-T\s+[/~.])'
   'wget\s+.*--post-file'
 
   # Destructive GitHub operations
