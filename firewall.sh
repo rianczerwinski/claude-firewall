@@ -156,8 +156,8 @@ ALLOW_PATTERNS=(
   # Node / npm / JS tooling
   '^(npm\s+(run|test|start|install|ci|build|exec|info|ls|outdated|audit|pack|version|init|create|link|unlink)|npx\s|node\s|tsx\s|ts-node\s|bun\s|deno\s)'
 
-  # Python
-  '^(python3?|pip3?|poetry|pdm|uv|ruff|black|mypy|pyright)(\s|$)'
+  # Python (including venv-qualified paths)
+  '^(\.?[a-zA-Z0-9._-]*/bin/)?(python3?|pip3?|poetry|pdm|uv|ruff|black|mypy|pyright)(\s|$)'
 
   # Rust
   '^cargo\s+(build|test|run|check|clippy|fmt|doc|bench|tree|add|remove|update|publish|install)'
