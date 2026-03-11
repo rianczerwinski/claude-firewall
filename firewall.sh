@@ -142,10 +142,10 @@ ALLOW_PATTERNS=(
   '^git\s+(-C\s+\S+\s+|--git-dir=\S+\s+|--work-tree=\S+\s+|--namespace=\S+\s+|--bare\s+|--no-pager\s+|-P\s+|--no-replace-objects\s+|--no-optional-locks\s+|--literal-pathspecs\s+|--glob-pathspecs\s+|--icase-pathspecs\s+)*(log|status|diff|show|branch|tag|rev-parse|remote|describe|shortlog|blame|ls-files|ls-tree|stash\s+list|config\s+--get|config\s+--list|rev-list|cat-file|for-each-ref|name-rev|reflog)'
 
   # Git — write (common safe operations; force-push caught by deny tier)
-  '^git\s+(-C\s+\S+\s+|--git-dir=\S+\s+|--work-tree=\S+\s+|--namespace=\S+\s+|--bare\s+|--no-pager\s+|-P\s+|--no-replace-objects\s+|--no-optional-locks\s+|--literal-pathspecs\s+|--glob-pathspecs\s+|--icase-pathspecs\s+)*(add|commit|stash|checkout|switch|merge|rebase|cherry-pick|fetch|pull|push|restore|mv|tag\s+-a|tag\s+-m|init|clone)'
+  '^git\s+(-C\s+\S+\s+|--git-dir=\S+\s+|--work-tree=\S+\s+|--namespace=\S+\s+|--bare\s+|--no-pager\s+|-P\s+|--no-replace-objects\s+|--no-optional-locks\s+|--literal-pathspecs\s+|--glob-pathspecs\s+|--icase-pathspecs\s+)*(add|commit|stash|checkout|switch|merge|rebase|cherry-pick|fetch|pull|push|restore|rm|mv|tag\s+-a|tag\s+-m|init|clone)'
 
   # File inspection
-  '^(ls|cat|head|tail|wc|file|stat|which|type|readlink|realpath|du|df|man)(\s|$)'
+  '^(ls|cat|head|tail|wc|file|stat|which|type|readlink|realpath|du|df|man|tree)(\s|$)'
 
   # Search
   '^(find|grep|rg|ag|fd|fzf)(\s|$)'
@@ -153,11 +153,19 @@ ALLOW_PATTERNS=(
   # Environment / info
   '^(pwd|echo|printf|date|env|printenv|hostname|uname|whoami|id|uptime|sw_vers|system_profiler)(\s|$)'
 
+  # Process inspection / management
+  '^(ps|lsof|kill|pkill)(\s|$)'
+
+  # Harmless utilities
+  '^(sleep|rmdir|sqlite3)(\s|$)'
+
   # Node / npm / JS tooling
   '^(npm\s+(run|test|start|install|ci|build|exec|info|ls|outdated|audit|pack|version|init|create|link|unlink)|npx\s|node\s|tsx\s|ts-node\s|bun\s|deno\s)'
 
   # Python (including venv-qualified paths)
   '^(\.?[a-zA-Z0-9._-]*/bin/)?(python3?|pip3?|poetry|pdm|uv|ruff|black|mypy|pyright)(\s|$)'
+  # Any binary inside a project-local .venv* directory (same trust class as bare python3)
+  '^\.venv[a-zA-Z0-9._-]*/bin/[a-zA-Z0-9._-]+(\s|$)'
 
   # Rust
   '^cargo\s+(build|test|run|check|clippy|fmt|doc|bench|tree|add|remove|update|publish|install)'
@@ -192,6 +200,7 @@ ALLOW_PATTERNS=(
   # Touch / chmod single files (chmod 777 and -R caught by deny)
   '^touch\s'
   '^chmod\s+[0-7]{3}\s'
+  '^chmod\s+[+][a-zA-Z]+\s'
 
   # Homebrew
   '^brew\s+(info|list|search|leaves|deps|doctor|config)'
