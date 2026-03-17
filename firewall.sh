@@ -141,8 +141,8 @@ ALLOW_PATTERNS=(
   # Excluded: -c (config execution vectors), --exec-path= (redirects command lookup).
   '^git\s+(-C\s+\S+\s+|--git-dir=\S+\s+|--work-tree=\S+\s+|--namespace=\S+\s+|--bare\s+|--no-pager\s+|-P\s+|--no-replace-objects\s+|--no-optional-locks\s+|--literal-pathspecs\s+|--glob-pathspecs\s+|--icase-pathspecs\s+)*(log|status|diff|show|branch|tag|rev-parse|remote|describe|shortlog|blame|ls-files|ls-tree|stash\s+list|config\s+--get|config\s+--list|rev-list|cat-file|for-each-ref|name-rev|reflog)'
 
-  # Git — write (common safe operations; force-push caught by deny tier)
-  '^git\s+(-C\s+\S+\s+|--git-dir=\S+\s+|--work-tree=\S+\s+|--namespace=\S+\s+|--bare\s+|--no-pager\s+|-P\s+|--no-replace-objects\s+|--no-optional-locks\s+|--literal-pathspecs\s+|--glob-pathspecs\s+|--icase-pathspecs\s+)*(add|commit|stash|checkout|switch|merge|rebase|cherry-pick|fetch|pull|push|restore|rm|mv|tag\s+-a|tag\s+-m|init|clone)'
+  # Git — write (common safe operations; force-push caught by deny tier, push falls to ASK)
+  '^git\s+(-C\s+\S+\s+|--git-dir=\S+\s+|--work-tree=\S+\s+|--namespace=\S+\s+|--bare\s+|--no-pager\s+|-P\s+|--no-replace-objects\s+|--no-optional-locks\s+|--literal-pathspecs\s+|--glob-pathspecs\s+|--icase-pathspecs\s+)*(add|commit|stash|checkout|switch|merge|rebase|cherry-pick|fetch|pull|restore|rm|mv|tag\s+-a|tag\s+-m|init|clone)'
 
   # File inspection
   '^(ls|cat|head|tail|wc|file|stat|which|type|readlink|realpath|du|df|man|tree)(\s|$)'
@@ -205,8 +205,13 @@ ALLOW_PATTERNS=(
   # Homebrew
   '^brew\s+(info|list|search|leaves|deps|doctor|config)'
 
-  # gh CLI (read + common write ops; gh repo delete caught by deny, gh api falls to ASK)
-  '^gh\s+(pr|issue|repo|run|search|auth\s+status|status)\s'
+  # gh CLI (read + safe ops; gh repo delete caught by deny, gh api falls to ASK)
+  # gh pr/issue create and gh pr merge fall to ASK — external-facing actions need human approval
+  '^gh\s+pr\s+(list|view|status|diff|checks|ready|comment)\s'
+  '^gh\s+pr\s+(list|view|status|diff|checks|ready|comment)$'
+  '^gh\s+issue\s+(list|view|status|comment)\s'
+  '^gh\s+issue\s+(list|view|status|comment)$'
+  '^gh\s+(repo\s+(list|view|clone|fork)|run|search|auth\s+status|status)\s'
   # gh gist — only list/view (create/edit can exfiltrate files, falls to ASK)
   '^gh\s+gist\s+(list|view)\s'
 
