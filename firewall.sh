@@ -157,15 +157,16 @@ ALLOW_PATTERNS=(
   '^(ps|lsof|kill|pkill)(\s|$)'
 
   # Harmless utilities
-  '^(sleep|rmdir|sqlite3)(\s|$)'
+  '^(sleep|rmdir|sqlite3|test|\[)(\s|$)'
 
   # Node / npm / JS tooling
   '^(npm\s+(run|test|start|install|ci|build|exec|info|ls|outdated|audit|pack|version|init|create|link|unlink)|npx\s|node\s|tsx\s|ts-node\s|bun\s|deno\s)'
 
   # Python (including venv-qualified paths)
   '^(\.?[a-zA-Z0-9._-]*/bin/)?(python3?|pip3?|poetry|pdm|uv|ruff|black|mypy|pyright)(\s|$)'
-  # Any binary inside a project-local .venv* directory (same trust class as bare python3)
+  # Any binary inside a .venv* directory — relative or absolute (same trust class as bare python3)
   '^\.venv[a-zA-Z0-9._-]*/bin/[a-zA-Z0-9._-]+(\s|$)'
+  '^/[^ ]*/\.venv[a-zA-Z0-9._-]*/bin/[a-zA-Z0-9._-]+(\s|$)'
 
   # Rust
   '^cargo\s+(build|test|run|check|clippy|fmt|doc|bench|tree|add|remove|update|publish|install)'
@@ -257,11 +258,24 @@ done < <(printf '%s' "$COMMAND" | awk 'BEGIN{RS="\0"} {
         seg_start = i + 1
         continue
       }
-      if (c == "|" || c == ";" || c == "&") {
+      if (c == "|" || c == ";") {
         printf "%s", substr($0, seg_start, i - seg_start)
         printf "%c", 0
         seg_start = i + 1
         continue
+      }
+      # Bare & (backgrounding) — but not when part of a redirect:
+      #   >&  (fd duplication, e.g. 2>&1)
+      #   &>  (bash stderr+stdout redirect, e.g. &>/dev/null)
+      if (c == "&") {
+        prev_c = (i > 1) ? substr($0, i-1, 1) : ""
+        next_c = (i < n) ? substr($0, i+1, 1) : ""
+        if (prev_c != ">" && next_c != ">") {
+          printf "%s", substr($0, seg_start, i - seg_start)
+          printf "%c", 0
+          seg_start = i + 1
+          continue
+        }
       }
     }
   }
@@ -330,9 +344,16 @@ for segment in "${SEGMENTS[@]}"; do
     all_allowed=false
     break
   fi
+  # Strip leading env-var assignments (KEY=val) before matching.
+  # These are harmless — they set env for the child process only.
+  # DENY already ran on the full command, so this only widens ALLOW.
+  match_seg="$segment"
+  while [[ "$match_seg" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^\ ]*\ (.+)$ ]]; do
+    match_seg="${BASH_REMATCH[1]}"
+  done
   segment_allowed=false
   for pattern in "${ALLOW_PATTERNS[@]}"; do
-    if printf '%s\n' "$segment" | grep -qE "$pattern"; then
+    if printf '%s\n' "$match_seg" | grep -qE "$pattern"; then
       segment_allowed=true
       break
     fi
