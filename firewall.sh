@@ -17,6 +17,7 @@ fi
 
 INPUT=$(cat)
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command')
+PERM_MODE=$(printf '%s' "$INPUT" | jq -r '.permission_mode // "default"')
 
 # ─── Tier 1: DENY (hard block, no override) ─────────────────────────────────
 
@@ -131,6 +132,66 @@ if printf '%s' "$COMMAND" | grep -qE '\$\(|`|<\(|>\('; then
   exit 0
 fi
 
+# ─── Mode-aware guard ───────────────────────────────────────────────────────
+# Uses permission_mode from hook stdin JSON (live session mode, not settings.json).
+# Runs after DENY, before ALLOW — intercepted commands never reach auto-approve.
+#
+# acceptEdits ("Edit automatically"): intercept external-facing and destructive
+#   commands. Local git writes (add, commit) still auto-approve.
+# default ("Ask before edits"): intercept ALL state-modifying commands.
+#   Only pure reads auto-approve.
+
+FIREWALL_LOG="${CLAUDE_FIREWALL_LOG:-$HOME/.claude/hooks/firewall-ask.log}"
+
+if [[ "$PERM_MODE" == "default" ]]; then
+  # Only reads should auto-approve. Intercept anything that modifies state.
+  DEFAULT_MODE_ASK=(
+    '\brm\s'
+    '\brmdir\s'
+    'git\s+(-C\s+\S+\s+|--git-dir=\S+\s+|--work-tree=\S+\s+|--namespace=\S+\s+|--bare\s+|--no-pager\s+|-P\s+|--no-replace-objects\s+|--no-optional-locks\s+|--literal-pathspecs\s+|--glob-pathspecs\s+|--icase-pathspecs\s+)*(add|commit|push|rm|mv|checkout|switch|merge|rebase|cherry-pick|fetch|pull|restore|stash\s+(push|pop|drop|apply|clear)|tag\s+-[amd]|init|clone)'
+    'gh\s+(pr|issue)\s'
+    '\bmkdir\s'
+    '\btouch\s'
+    '\bchmod\s'
+    '\b(cp|mv)\s'
+    '\bsed\s.*-i'
+    '\bpatch\s'
+    '\btee\s'
+    '\bnpm\s+(install|ci|link|unlink|create|init)'
+    '\bpip3?\s+install'
+    '\bcargo\s+(add|remove|install|publish)'
+    '\bgo\s+(get|install)'
+    '\bbrew\s+(install|uninstall|upgrade)'
+    '\bkill\s'
+    '\bpkill\s'
+  )
+  for pattern in "${DEFAULT_MODE_ASK[@]}"; do
+    if printf '%s\n' "$COMMAND" | grep -qE "$pattern"; then
+      printf '%s\tMODE_ASK\t%s\n' "$(date '+%Y%m%dT%H%M%S')" "$COMMAND" >> "$FIREWALL_LOG"
+
+      exit 0
+    fi
+  done
+fi
+
+if [[ "$PERM_MODE" == "acceptEdits" ]]; then
+  # Local writes OK, but external-facing and destructive commands need approval.
+  ACCEPT_EDITS_ASK=(
+    'git\s+(-C\s+\S+\s+|--git-dir=\S+\s+|--work-tree=\S+\s+|--namespace=\S+\s+|--bare\s+|--no-pager\s+|-P\s+|--no-replace-objects\s+|--no-optional-locks\s+|--literal-pathspecs\s+|--glob-pathspecs\s+|--icase-pathspecs\s+)*push'
+    'git\s+(-C\s+\S+\s+|--git-dir=\S+\s+|--work-tree=\S+\s+|--namespace=\S+\s+|--bare\s+|--no-pager\s+|-P\s+|--no-replace-objects\s+|--no-optional-locks\s+|--literal-pathspecs\s+|--glob-pathspecs\s+|--icase-pathspecs\s+)*rm'
+    '\brm\s'
+    'gh\s+pr\s+(create|close|merge|edit|reopen)'
+    'gh\s+issue\s+(create|close|edit|reopen)'
+  )
+  for pattern in "${ACCEPT_EDITS_ASK[@]}"; do
+    if printf '%s\n' "$COMMAND" | grep -qE "$pattern"; then
+      printf '%s\tMODE_ASK\t%s\n' "$(date '+%Y%m%dT%H%M%S')" "$COMMAND" >> "$FIREWALL_LOG"
+
+      exit 0
+    fi
+  done
+fi
+
 # ─── Tier 2: ALLOW (auto-approve, no prompt) ────────────────────────────────
 
 ALLOW_PATTERNS=(
@@ -142,7 +203,8 @@ ALLOW_PATTERNS=(
   '^git\s+(-C\s+\S+\s+|--git-dir=\S+\s+|--work-tree=\S+\s+|--namespace=\S+\s+|--bare\s+|--no-pager\s+|-P\s+|--no-replace-objects\s+|--no-optional-locks\s+|--literal-pathspecs\s+|--glob-pathspecs\s+|--icase-pathspecs\s+)*(log|status|diff|show|branch|tag|rev-parse|remote|describe|shortlog|blame|ls-files|ls-tree|stash\s+list|config\s+--get|config\s+--list|rev-list|cat-file|for-each-ref|name-rev|reflog)'
 
   # Git — write (common safe operations; force-push caught by deny tier, push falls to ASK)
-  '^git\s+(-C\s+\S+\s+|--git-dir=\S+\s+|--work-tree=\S+\s+|--namespace=\S+\s+|--bare\s+|--no-pager\s+|-P\s+|--no-replace-objects\s+|--no-optional-locks\s+|--literal-pathspecs\s+|--glob-pathspecs\s+|--icase-pathspecs\s+)*(add|commit|stash|checkout|switch|merge|rebase|cherry-pick|fetch|pull|restore|rm|mv|tag\s+-a|tag\s+-m|init|clone)'
+  # rm removed — always intercepted by mode-aware guard or falls to ASK
+  '^git\s+(-C\s+\S+\s+|--git-dir=\S+\s+|--work-tree=\S+\s+|--namespace=\S+\s+|--bare\s+|--no-pager\s+|-P\s+|--no-replace-objects\s+|--no-optional-locks\s+|--literal-pathspecs\s+|--glob-pathspecs\s+|--icase-pathspecs\s+)*(add|commit|stash|checkout|switch|merge|rebase|cherry-pick|fetch|pull|restore|mv|tag\s+-a|tag\s+-m|init|clone)'
 
   # File inspection
   '^(ls|cat|head|tail|wc|file|stat|which|type|readlink|realpath|du|df|man|tree)(\s|$)'
@@ -191,9 +253,8 @@ ALLOW_PATTERNS=(
   '^docker\s+(ps|logs|images|inspect|stats|top|port|network\s+ls|volume\s+ls|info|version)'
   '^docker-compose\s+(ps|logs|config)'
 
-  # Removal of specific files (not -rf; deny tier catches dangerous rm)
-  '^rm\s+[^-]'
-  '^rm\s+-[^rR]*\s'
+  # rm removed from ALLOW — always intercepted by mode-aware guard.
+  # Deny tier (1b) still hard-blocks rm -rf at dangerous scopes.
 
   # cp / mv (generally safe, source of data not destroyed)
   '^(cp|mv)\s'
@@ -365,6 +426,7 @@ for segment in "${SEGMENTS[@]}"; do
 done
 
 if $all_allowed; then
+
   echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"Matched auto-approve pattern"}}'
   exit 0
 fi
@@ -372,7 +434,6 @@ fi
 # ─── Tier 3: ASK (unknown command — fall through to permission prompt) ───────
 
 # Log ASK-tier hits so you can review and promote patterns over time.
-FIREWALL_LOG="${CLAUDE_FIREWALL_LOG:-$HOME/.claude/hooks/firewall-ask.log}"
 printf '%s\tASK\t%s\n' "$(date '+%Y%m%dT%H%M%S')" "$COMMAND" >> "$FIREWALL_LOG"
 
 # No output, exit 0. Without Bash(*) in the permission allow list,
