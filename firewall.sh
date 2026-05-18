@@ -150,6 +150,7 @@ FIREWALL_LOG="${CLAUDE_FIREWALL_LOG:-$HOME/.claude/hooks/firewall-ask.log}"
 # lines, defeating that pipeline. Escape newline/tab to literal markers so
 # every entry is exactly one greppable line; the original is recoverable.
 LOG_COMMAND="${COMMAND//$'\n'/\\n}"
+LOG_COMMAND="${LOG_COMMAND//$'\r'/\\r}"
 LOG_COMMAND="${LOG_COMMAND//$'\t'/\\t}"
 
 if [[ "$PERM_MODE" == "default" ]]; then

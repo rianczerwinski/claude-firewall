@@ -94,7 +94,7 @@ cut -f3 ~/.claude/hooks/firewall-ask.log | sort | uniq -c | sort -rn | head -20
 
 Commands that appear frequently and are safe can be promoted to ALLOW by adding a pattern to the `ALLOW_PATTERNS` array in `firewall.sh`.
 
-The ASK log is a TSV with columns: `timestamp`, `tier` (always "ASK"), `command` — exactly one record per physical line (newlines and tabs inside a multi-line command are escaped to literal `\n` / `\t` so a heredoc or `python -c "..."` can't shatter one entry across many lines and break the `cut -f3` pipeline). To synthesize ALLOW patterns from the log:
+The ASK log is a TSV with columns: `timestamp`, `tier` (always "ASK"), `command` — exactly one record per physical line (newlines, carriage returns, and tabs inside a multi-line command are escaped to literal `\n` / `\r` / `\t` so a heredoc or `python -c "..."` can't shatter one entry across many lines or inject a phantom TSV column, breaking the `cut -f3` pipeline). To synthesize ALLOW patterns from the log:
 
 1. Read the log: `cut -f3 ~/.claude/hooks/firewall-ask.log | sort | uniq -c | sort -rn`
 2. Identify commands that are safe to auto-approve
