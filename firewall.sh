@@ -143,6 +143,15 @@ fi
 
 FIREWALL_LOG="${CLAUDE_FIREWALL_LOG:-$HOME/.claude/hooks/firewall-ask.log}"
 
+# The ASK/MODE_ASK log is TSV (timestamp, tier, command), one record per
+# line — the documented review pipeline is `cut -f3 LOG | sort | uniq -c`.
+# A multi-line command (heredoc, python -c "..." spanning lines) writes
+# embedded newlines that shatter one logical entry into many physical
+# lines, defeating that pipeline. Escape newline/tab to literal markers so
+# every entry is exactly one greppable line; the original is recoverable.
+LOG_COMMAND="${COMMAND//$'\n'/\\n}"
+LOG_COMMAND="${LOG_COMMAND//$'\t'/\\t}"
+
 if [[ "$PERM_MODE" == "default" ]]; then
   # Only reads should auto-approve. Intercept anything that modifies state.
   DEFAULT_MODE_ASK=(
@@ -167,7 +176,7 @@ if [[ "$PERM_MODE" == "default" ]]; then
   )
   for pattern in "${DEFAULT_MODE_ASK[@]}"; do
     if printf '%s\n' "$COMMAND" | grep -qE "$pattern"; then
-      printf '%s\tMODE_ASK\t%s\n' "$(date '+%Y%m%dT%H%M%S')" "$COMMAND" >> "$FIREWALL_LOG"
+      printf '%s\tMODE_ASK\t%s\n' "$(date '+%Y%m%dT%H%M%S')" "$LOG_COMMAND" >> "$FIREWALL_LOG"
 
       exit 0
     fi
@@ -185,7 +194,7 @@ if [[ "$PERM_MODE" == "acceptEdits" ]]; then
   )
   for pattern in "${ACCEPT_EDITS_ASK[@]}"; do
     if printf '%s\n' "$COMMAND" | grep -qE "$pattern"; then
-      printf '%s\tMODE_ASK\t%s\n' "$(date '+%Y%m%dT%H%M%S')" "$COMMAND" >> "$FIREWALL_LOG"
+      printf '%s\tMODE_ASK\t%s\n' "$(date '+%Y%m%dT%H%M%S')" "$LOG_COMMAND" >> "$FIREWALL_LOG"
 
       exit 0
     fi
@@ -434,7 +443,7 @@ fi
 # ─── Tier 3: ASK (unknown command — fall through to permission prompt) ───────
 
 # Log ASK-tier hits so you can review and promote patterns over time.
-printf '%s\tASK\t%s\n' "$(date '+%Y%m%dT%H%M%S')" "$COMMAND" >> "$FIREWALL_LOG"
+printf '%s\tASK\t%s\n' "$(date '+%Y%m%dT%H%M%S')" "$LOG_COMMAND" >> "$FIREWALL_LOG"
 
 # No output, exit 0. Without Bash(*) in the permission allow list,
 # the default permission system will prompt the user.
